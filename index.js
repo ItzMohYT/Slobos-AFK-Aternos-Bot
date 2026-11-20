@@ -20,6 +20,7 @@ let botEnabled = true;
 let isReconnecting = false;
 let reconnectTimeout = null;
 let keepAliveInterval = null;
+let afkLookInterval = null;
 
 // Bot state tracking
 let botState = {
@@ -38,11 +39,32 @@ function logBoth(message) {
   } catch (_) {}
 }
 
+function stopAfkLook() {
+  if (afkLookInterval) {
+    clearInterval(afkLookInterval);
+    afkLookInterval = null;
+  }
+}
+
 function clearTimers() {
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
     reconnectTimeout = null;
   }
+  stopAfkLook();
+}
+
+function startSafeAfkLook() {
+  stopAfkLook();
+  afkLookInterval = setInterval(() => {
+    if (!bot || !botState.connected || !bot.entity) return;
+    try {
+      const yaw = (Math.random() - 0.5) * Math.PI;
+      const pitch = (Math.random() - 0.5) * 0.4;
+      bot.look(yaw, pitch, false);
+      botState.lastActivity = Date.now();
+    } catch (_) {}
+  }, 25000);
 }
 
 function scheduleReconnect() {
@@ -86,8 +108,12 @@ function attachPacketGuard(client) {
           }
         }
       }
-      // If movement is disabled in settings, block extra movement packets after spawn
-      if (config.movement && config.movement.enabled === false && name !== "flying") {
+      if (
+        config.movement &&
+        config.movement.enabled === false &&
+        name !== "flying" &&
+        name !== "look"
+      ) {
         return;
       }
     }
@@ -147,6 +173,7 @@ function startBotInstance() {
       isReconnecting = false;
       botState.lastActivity = Date.now();
       logBoth(`[Bot] [+] Successfully spawned on server! (Version: ${bot.version || version || "auto"})`);
+      startSafeAfkLook();
 
       if (config.movement && config.movement.enabled) {
         const movements = new Movements(bot);
@@ -163,6 +190,7 @@ function startBotInstance() {
 
     bot.on("kicked", (reason) => {
       botState.connected = false;
+      stopAfkLook();
       const reasonStr = typeof reason === "string" ? reason : JSON.stringify(reason);
       logBoth(`[Bot] Kicked: ${reasonStr}`);
       scheduleReconnect();
@@ -170,6 +198,7 @@ function startBotInstance() {
 
     bot.on("end", (reason) => {
       botState.connected = false;
+      stopAfkLook();
       logBoth(`[Bot] Disconnected: ${reason || "socketClosed"}`);
       scheduleReconnect();
     });
