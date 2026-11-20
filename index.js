@@ -17,6 +17,7 @@ const PORT = process.env.PORT || 5000;
 
 let bot = null;
 let botEnabled = true;
+let isReconnecting = false;
 let reconnectTimeout = null;
 let keepAliveInterval = null;
 
@@ -45,10 +46,11 @@ function clearTimers() {
 }
 
 function scheduleReconnect() {
-  if (!botEnabled) return;
+  if (!botEnabled || isReconnecting) return;
   const autoReconnect = config.utils ? config.utils["auto-reconnect"] !== false : true;
   if (!autoReconnect) return;
 
+  isReconnecting = true;
   const baseDelay = (config.utils && config.utils["auto-reconnect-delay"]) || 2000;
   const maxDelay = (config.utils && config.utils["max-reconnect-delay"]) || 120000;
   botState.reconnectAttempts += 1;
@@ -57,13 +59,46 @@ function scheduleReconnect() {
   logBoth(`[Bot] Reconnecting in ${(delay / 1000).toFixed(2)}s (attempt #${botState.reconnectAttempts})`);
   clearTimers();
   reconnectTimeout = setTimeout(() => {
+    isReconnecting = false;
     startBotInstance();
   }, delay);
+}
+
+function attachPacketGuard(client) {
+  if (!client || typeof client.write !== "function") return;
+  const originalWrite = client.write.bind(client);
+
+  client.write = function (name, params) {
+    if (
+      name === "position" ||
+      name === "position_look" ||
+      name === "look" ||
+      name === "flying"
+    ) {
+      if (params && typeof params === "object") {
+        const numericKeys = ["x", "y", "z", "yaw", "pitch"];
+        for (const key of numericKeys) {
+          if (key in params) {
+            const val = params[key];
+            if (typeof val !== "number" || !Number.isFinite(val)) {
+              return; // Drop invalid/NaN movement packet
+            }
+          }
+        }
+      }
+      // If movement is disabled in settings, block extra movement packets after spawn
+      if (config.movement && config.movement.enabled === false && name !== "flying") {
+        return;
+      }
+    }
+    return originalWrite(name, params);
+  };
 }
 
 function startBotInstance() {
   if (!botEnabled) return;
   clearTimers();
+  isReconnecting = false;
 
   if (bot) {
     try {
@@ -97,6 +132,10 @@ function startBotInstance() {
       physicsEnabled: false,
     });
 
+    if (bot._client) {
+      attachPacketGuard(bot._client);
+    }
+
     if (config.movement && config.movement.enabled) {
       bot.loadPlugin(pathfinder);
     }
@@ -105,6 +144,7 @@ function startBotInstance() {
       bot.physicsEnabled = false;
       botState.connected = true;
       botState.reconnectAttempts = 0;
+      isReconnecting = false;
       botState.lastActivity = Date.now();
       logBoth(`[Bot] [+] Successfully spawned on server! (Version: ${bot.version || version || "auto"})`);
 
@@ -145,6 +185,7 @@ function startBotInstance() {
 
 function stopBotInstance() {
   botEnabled = false;
+  isReconnecting = false;
   clearTimers();
   botState.connected = false;
   if (bot) {
@@ -157,7 +198,9 @@ function stopBotInstance() {
   logBoth("[Control] Bot stopped.");
 }
 
-// Dashboard route
+// ============================================================
+// WEB DASHBOARD ROUTES
+// ============================================================
 app.get("/", (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -1101,6 +1144,9 @@ app.get("/logs", (req, res) => {
   `);
 });
 
+// ============================================================
+// BOT CONTROL & COMMAND ENDPOINTS
+// ============================================================
 app.post("/start", (req, res) => {
   if (botState.connected) {
     return res.json({ success: false, msg: "Bot is already connected." });
