@@ -21,7 +21,6 @@ let isReconnecting = false;
 let reconnectTimeout = null;
 let keepAliveInterval = null;
 let antiAfkInterval = null;
-let moveTimeout = null;
 let spawnDelayTimeout = null;
 
 // Bot state tracking
@@ -50,10 +49,6 @@ function stopAntiAfk() {
     clearInterval(antiAfkInterval);
     antiAfkInterval = null;
   }
-  if (moveTimeout) {
-    clearTimeout(moveTimeout);
-    moveTimeout = null;
-  }
   if (bot) {
     try {
       bot.clearControlStates();
@@ -72,37 +67,19 @@ function clearTimers() {
 function startAntiAfkMovement() {
   stopAntiAfk();
 
-  const directions = ["forward", "back", "left", "right"];
-
-  // الانتظار 5 ثوانٍ بعد spawn قبل إرسال أي حزمة حركة
+  // الانتظار 5 ثوانٍ بعد spawn ثم الالتفاف بالرأس فقط بدون مشي أو قفز
   spawnDelayTimeout = setTimeout(() => {
     if (!bot || !botState.connected || !bot.entity) return;
 
     antiAfkInterval = setInterval(() => {
       if (!bot || !botState.connected || !bot.entity) return;
-
       try {
         const yaw = (Math.random() - 0.5) * Math.PI * 2;
-        const pitch = (Math.random() - 0.5) * 0.5;
+        const pitch = (Math.random() - 0.5) * 0.4;
         bot.look(yaw, pitch, false);
-
-        // المشي الأفقي فقط بدون قفز
-        const dir = directions[Math.floor(Math.random() * directions.length)];
-        const walkDuration = 500 + Math.floor(Math.random() * 400);
-
-        bot.clearControlStates();
-        bot.setControlState(dir, true);
-
-        moveTimeout = setTimeout(() => {
-          if (!bot) return;
-          try {
-            bot.clearControlStates();
-          } catch (_) {}
-        }, walkDuration);
-
         botState.lastActivity = Date.now();
       } catch (_) {}
-    }, 15000);
+    }, 20000);
   }, 5000);
 }
 
@@ -130,12 +107,11 @@ function attachPacketGuard(client) {
   const originalWrite = client.write.bind(client);
 
   client.write = function (name, params) {
-    if (
-      name === "position" ||
-      name === "position_look" ||
-      name === "look" ||
-      name === "flying"
-    ) {
+    // منع حزم الموقع التي قد تسبب Invalid move player packet received مع physicsEnabled: false
+    if (name === "position" || name === "position_look") {
+      return;
+    }
+    if (name === "look" || name === "flying") {
       if (params && typeof params === "object") {
         const numericKeys = ["x", "y", "z", "yaw", "pitch"];
         for (const key of numericKeys) {
@@ -186,7 +162,7 @@ function startBotInstance() {
       username,
       auth: authType,
       version,
-      physicsEnabled: true,
+      physicsEnabled: false,
     });
 
     if (bot._client) {
@@ -198,7 +174,7 @@ function startBotInstance() {
     }
 
     bot.once("spawn", () => {
-      bot.physicsEnabled = true;
+      bot.physicsEnabled = false;
       botState.connected = true;
       botState.reconnectAttempts = 0;
       isReconnecting = false;
