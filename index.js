@@ -22,6 +22,7 @@ let reconnectTimeout = null;
 let keepAliveInterval = null;
 let antiAfkInterval = null;
 let moveTimeout = null;
+let spawnDelayTimeout = null;
 
 // Bot state tracking
 let botState = {
@@ -41,6 +42,10 @@ function logBoth(message) {
 }
 
 function stopAntiAfk() {
+  if (spawnDelayTimeout) {
+    clearTimeout(spawnDelayTimeout);
+    spawnDelayTimeout = null;
+  }
   if (antiAfkInterval) {
     clearInterval(antiAfkInterval);
     antiAfkInterval = null;
@@ -69,34 +74,36 @@ function startAntiAfkMovement() {
 
   const directions = ["forward", "back", "left", "right"];
 
-  antiAfkInterval = setInterval(() => {
+  // الانتظار 5 ثوانٍ بعد spawn قبل إرسال أي حزمة حركة
+  spawnDelayTimeout = setTimeout(() => {
     if (!bot || !botState.connected || !bot.entity) return;
 
-    try {
-      const yaw = (Math.random() - 0.5) * Math.PI * 2;
-      const pitch = (Math.random() - 0.5) * 0.5;
-      bot.look(yaw, pitch, false);
+    antiAfkInterval = setInterval(() => {
+      if (!bot || !botState.connected || !bot.entity) return;
 
-      const dir = directions[Math.floor(Math.random() * directions.length)];
-      const walkDuration = 600 + Math.floor(Math.random() * 600);
+      try {
+        const yaw = (Math.random() - 0.5) * Math.PI * 2;
+        const pitch = (Math.random() - 0.5) * 0.5;
+        bot.look(yaw, pitch, false);
 
-      bot.clearControlStates();
-      bot.setControlState(dir, true);
+        // المشي الأفقي فقط بدون قفز
+        const dir = directions[Math.floor(Math.random() * directions.length)];
+        const walkDuration = 500 + Math.floor(Math.random() * 400);
 
-      if (bot.entity.onGround && Math.random() < 0.4) {
-        bot.setControlState("jump", true);
-      }
+        bot.clearControlStates();
+        bot.setControlState(dir, true);
 
-      moveTimeout = setTimeout(() => {
-        if (!bot) return;
-        try {
-          bot.clearControlStates();
-        } catch (_) {}
-      }, walkDuration);
+        moveTimeout = setTimeout(() => {
+          if (!bot) return;
+          try {
+            bot.clearControlStates();
+          } catch (_) {}
+        }, walkDuration);
 
-      botState.lastActivity = Date.now();
-    } catch (_) {}
-  }, 15000);
+        botState.lastActivity = Date.now();
+      } catch (_) {}
+    }, 15000);
+  }, 5000);
 }
 
 function scheduleReconnect() {
