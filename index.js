@@ -69,12 +69,21 @@ function clearTimers() {
   stopAntiAfk();
 }
 
+function isFatalDisconnectReason(reasonText) {
+  const lower = String(reasonText || "").toLowerCase();
+  return (
+    lower.includes("invalid move player packet received") ||
+    lower.includes("banned") ||
+    lower.includes("terms of service") ||
+    lower.includes("idle for too long")
+  );
+}
+
 function startAntiAfkMovement() {
   stopAntiAfk();
 
   const directions = ["forward", "back", "left", "right"];
 
-  // تأخير 5 ثوانٍ بعد spawn ثم حركة قصيرة جداً كل 35 ثانية بدون قفز
   spawnDelayTimeout = setTimeout(() => {
     if (!bot || !botState.connected || !bot.entity || !bot.entity.position) return;
 
@@ -154,7 +163,7 @@ function attachPacketGuard(client) {
 }
 
 function startBotInstance() {
-  if (!botEnabled) return;
+  botEnabled = true;
   clearTimers();
   isReconnecting = false;
 
@@ -226,10 +235,11 @@ function startBotInstance() {
       const reasonStr = typeof reason === "string" ? reason : JSON.stringify(reason);
       logBoth(`[Bot] Kicked: ${reasonStr}`);
 
-      const lower = reasonStr.toLowerCase();
-      if (lower.includes("banned") || lower.includes("terms of service") || lower.includes("idle for too long")) {
+      if (isFatalDisconnectReason(reasonStr)) {
         botEnabled = false;
-        logBoth("[Bot] Auto-reconnect paused due to ban / TOS notice.");
+        isReconnecting = false;
+        clearTimers();
+        logBoth("[Bot] Auto-reconnect stopped due to invalid move packet or server restriction.");
         return;
       }
       scheduleReconnect();
@@ -238,12 +248,28 @@ function startBotInstance() {
     bot.on("end", (reason) => {
       botState.connected = false;
       stopAntiAfk();
-      logBoth(`[Bot] Disconnected: ${reason || "socketClosed"}`);
+      const reasonStr = typeof reason === "string" ? reason : JSON.stringify(reason || "");
+      logBoth(`[Bot] Disconnected: ${reasonStr || "socketClosed"}`);
+
+      if (isFatalDisconnectReason(reasonStr)) {
+        botEnabled = false;
+        isReconnecting = false;
+        clearTimers();
+        logBoth("[Bot] Auto-reconnect stopped due to invalid move packet or server restriction.");
+        return;
+      }
       scheduleReconnect();
     });
 
     bot.on("error", (err) => {
-      logBoth(`[Bot] Error: ${err && err.message ? err.message : String(err)}`);
+      const errMsg = err && err.message ? err.message : String(err);
+      logBoth(`[Bot] Error: ${errMsg}`);
+      if (isFatalDisconnectReason(errMsg)) {
+        botEnabled = false;
+        isReconnecting = false;
+        clearTimers();
+        logBoth("[Bot] Auto-reconnect stopped due to packet/protocol error.");
+      }
     });
   } catch (err) {
     logBoth(`[Bot] Failed to create bot: ${err && err.message ? err.message : String(err)}`);
