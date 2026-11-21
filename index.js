@@ -20,7 +20,8 @@ let botEnabled = true;
 let isReconnecting = false;
 let reconnectTimeout = null;
 let keepAliveInterval = null;
-let afkLookInterval = null;
+let antiAfkInterval = null;
+let moveTimeout = null;
 
 // Bot state tracking
 let botState = {
@@ -39,10 +40,19 @@ function logBoth(message) {
   } catch (_) {}
 }
 
-function stopAfkLook() {
-  if (afkLookInterval) {
-    clearInterval(afkLookInterval);
-    afkLookInterval = null;
+function stopAntiAfk() {
+  if (antiAfkInterval) {
+    clearInterval(antiAfkInterval);
+    antiAfkInterval = null;
+  }
+  if (moveTimeout) {
+    clearTimeout(moveTimeout);
+    moveTimeout = null;
+  }
+  if (bot) {
+    try {
+      bot.clearControlStates();
+    } catch (_) {}
   }
 }
 
@@ -51,20 +61,42 @@ function clearTimers() {
     clearTimeout(reconnectTimeout);
     reconnectTimeout = null;
   }
-  stopAfkLook();
+  stopAntiAfk();
 }
 
-function startSafeAfkLook() {
-  stopAfkLook();
-  afkLookInterval = setInterval(() => {
+function startAntiAfkMovement() {
+  stopAntiAfk();
+
+  const directions = ["forward", "back", "left", "right"];
+
+  antiAfkInterval = setInterval(() => {
     if (!bot || !botState.connected || !bot.entity) return;
+
     try {
-      const yaw = (Math.random() - 0.5) * Math.PI;
-      const pitch = (Math.random() - 0.5) * 0.4;
+      const yaw = (Math.random() - 0.5) * Math.PI * 2;
+      const pitch = (Math.random() - 0.5) * 0.5;
       bot.look(yaw, pitch, false);
+
+      const dir = directions[Math.floor(Math.random() * directions.length)];
+      const walkDuration = 600 + Math.floor(Math.random() * 600);
+
+      bot.clearControlStates();
+      bot.setControlState(dir, true);
+
+      if (bot.entity.onGround && Math.random() < 0.4) {
+        bot.setControlState("jump", true);
+      }
+
+      moveTimeout = setTimeout(() => {
+        if (!bot) return;
+        try {
+          bot.clearControlStates();
+        } catch (_) {}
+      }, walkDuration);
+
       botState.lastActivity = Date.now();
     } catch (_) {}
-  }, 25000);
+  }, 15000);
 }
 
 function scheduleReconnect() {
@@ -103,18 +135,10 @@ function attachPacketGuard(client) {
           if (key in params) {
             const val = params[key];
             if (typeof val !== "number" || !Number.isFinite(val)) {
-              return; // Drop invalid/NaN movement packet
+              return;
             }
           }
         }
-      }
-      if (
-        config.movement &&
-        config.movement.enabled === false &&
-        name !== "flying" &&
-        name !== "look"
-      ) {
-        return;
       }
     }
     return originalWrite(name, params);
@@ -155,7 +179,7 @@ function startBotInstance() {
       username,
       auth: authType,
       version,
-      physicsEnabled: false,
+      physicsEnabled: true,
     });
 
     if (bot._client) {
@@ -167,13 +191,13 @@ function startBotInstance() {
     }
 
     bot.once("spawn", () => {
-      bot.physicsEnabled = false;
+      bot.physicsEnabled = true;
       botState.connected = true;
       botState.reconnectAttempts = 0;
       isReconnecting = false;
       botState.lastActivity = Date.now();
       logBoth(`[Bot] [+] Successfully spawned on server! (Version: ${bot.version || version || "auto"})`);
-      startSafeAfkLook();
+      startAntiAfkMovement();
 
       if (config.movement && config.movement.enabled) {
         const movements = new Movements(bot);
@@ -190,7 +214,7 @@ function startBotInstance() {
 
     bot.on("kicked", (reason) => {
       botState.connected = false;
-      stopAfkLook();
+      stopAntiAfk();
       const reasonStr = typeof reason === "string" ? reason : JSON.stringify(reason);
       logBoth(`[Bot] Kicked: ${reasonStr}`);
       scheduleReconnect();
@@ -198,7 +222,7 @@ function startBotInstance() {
 
     bot.on("end", (reason) => {
       botState.connected = false;
-      stopAfkLook();
+      stopAntiAfk();
       logBoth(`[Bot] Disconnected: ${reason || "socketClosed"}`);
       scheduleReconnect();
     });
